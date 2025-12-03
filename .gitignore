@@ -1,0 +1,38 @@
+# virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# python cache / build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
+
+# models / large binaries (do NOT commit)
+models/
+models/*.caffemodel
+models/*.onnx
+models/*.pb
+models/*.pt
+models/*.tflite
+models/pca_db.npz
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs / env
+*.log
+.env
+
+# node / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*

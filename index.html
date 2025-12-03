@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Image Recognition</title>
+    <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body>
+    <main>
+        <h1>Xử lý hình ảnh</h1>
+
+        <div id="drop-area" class="drop-area" tabindex="0">
+            <p>Kéo & thả ảnh vào đây hoặc <label for="fileElem" class="browse">chọn file</label></p>
+            <input id="fileElem" type="file" accept="image/*" />
+            <div class="controls" id="controls">
+                <select id="modeSelect" class="mode-select" title="Chọn chế độ xử lý ảnh">
+                    <option value="gray8" selected>Grayscale 8-bit</option>
+                    <option value="negative">Negative images</option>
+                    <option value="threshold">Thresholding (Binary)</option>
+                    <option value="log">Logarithmic Transformation</option>
+                    <option value="gamma">Power‑Law (Gamma)</option>
+                    <option value="piecewise">Piecewise Linear (Contrast Stretch)</option>
+                    <option value="median">Salt & Pepper Noise</option>
+                    <option value="detect">Nhận diện vật thể</option>
+                </select>
+                <label class="gamma-controls" style="display:inline-flex;align-items:center;gap:8px;margin-left:8px;">
+                    <input id="gammaAuto" type="checkbox" checked title="Auto‑detect gamma" />
+                    <span style="font-size:0.9rem;">Auto</span>
+                    <input id="gammaInput" type="number" step="0.1" min="0.1" max="10" placeholder="γ (ví dụ 0.6)" style="width:90px;margin-left:6px;" title="Nhập γ để ép giá trị (bỏ chọn Auto để dùng)" />
+                </label>
+                <!-- Piecewise params (hidden by default, shown when mode=piecewise) -->
+                <div id="piecewiseControls" style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;">
+                    <label style="font-size:0.9rem">r1</label><input id="r1Input" type="number" min="1" max="254" value="70" style="width:64px" />
+                    <label style="font-size:0.9rem">s1</label><input id="s1Input" type="number" min="0" max="255" value="10" style="width:64px" />
+                    <label style="font-size:0.9rem">r2</label><input id="r2Input" type="number" min="2" max="255" value="180" style="width:64px" />
+                    <label style="font-size:0.9rem">s2</label><input id="s2Input" type="number" min="0" max="255" value="245" style="width:64px" />
+                </div>
+                <button id="uploadBtn" class="btn primary" type="button">Tải ảnh lên</button>
+                <button id="clearBtn" class="btn primary" type="button">Xóa</button>
+            </div>
+        </div>
+
+        <section id="result" class="result">
+            <h2>Kết quả</h2>
+             <div id="preview" class="preview" aria-live="polite"></div>
+            <pre id="resultText">Chưa có ảnh</pre>
+        </section>
+    </main>
+
+    <script type="module" src="src/app.js"></script>
+</body>
+</html>
