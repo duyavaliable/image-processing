@@ -21,8 +21,8 @@
                     <option value="log">Logarithmic Transformation</option>
                     <option value="gamma">Power‑Law (Gamma)</option>
                     <option value="piecewise">Piecewise Linear (Contrast Stretch)</option>
-                    <option value="median">Salt & Pepper Noise</option>
-                    <option value="detect">Nhận diện vật thể</option>
+                    <option value="count_objects">Đếm vật thể</option>
+                    <option value="denoise">Xử lý nhiễu (Auto)</option>
                 </select>
                 <label class="gamma-controls" style="display:inline-flex;align-items:center;gap:8px;margin-left:8px;">
                     <input id="gammaAuto" type="checkbox" checked title="Auto‑detect gamma" />
@@ -36,9 +36,19 @@
                     <label style="font-size:0.9rem">r2</label><input id="r2Input" type="number" min="2" max="255" value="180" style="width:64px" />
                     <label style="font-size:0.9rem">s2</label><input id="s2Input" type="number" min="0" max="255" value="245" style="width:64px" />
                 </div>
-                <button id="uploadBtn" class="btn primary" type="button">Tải ảnh lên</button>
-                <button id="clearBtn" class="btn primary" type="button">Xóa</button>
+                <!-- Count objects controls (hidden by default) -->
+                <div id="countControls" class="count-controls" style="display:none;margin-left:12px;gap:8px;align-items:center;flex-wrap:nowrap;">
+                    <label style="font-size:0.9rem;">Đếm:</label>
+                    <input id="countClassInput" type="text" placeholder="person, car, hoặc 'all'" 
+                           style="width:180px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:0.9rem;" 
+                           title="Nhập tên đối tượng (ví dụ: person, car, dog) hoặc 'all' để đếm tất cả" />
+                    <small style="color:#666;font-size:0.8rem;white-space:nowrap;">
+                        (ví dụ: person, car, dog)
+                    </small>
+                </div>
             </div>
+            <button id="uploadBtn" class="btn primary" type="button">Tải ảnh lên</button>
+            <button id="clearBtn" class="btn primary" type="button">Xóa</button>
         </div>
 
         <section id="result" class="result">

@@ -46,6 +46,8 @@ const r1Input = document.getElementById('r1Input');
 const s1Input = document.getElementById('s1Input');
 const r2Input = document.getElementById('r2Input');
 const s2Input = document.getElementById('s2Input');
+const countControls = document.getElementById('countControls');
+const countClassInput = document.getElementById('countClassInput');
 if (clearBtn) clearBtn.addEventListener('click', ()=> resetAll());
 
 const uploadBtn = document.getElementById('uploadBtn');
@@ -110,6 +112,9 @@ if (modeSelect) {
 
         // show/hide piecewise controls only when mode is piecewise
         if (piecewiseControls) piecewiseControls.style.display = (mode === 'piecewise') ? '' : 'none';
+
+        // show/hide count controls only when mode is count_objects
+        if (countControls) countControls.style.display = (mode === 'count_objects') ? 'inline-flex' : 'none';
 
         // Auto checkbox should be visible only for gamma or piecewise modes
         // gammaAuto is the checkbox element; its parent label contains text + input
@@ -227,6 +232,52 @@ if (modeSelect) {
                 return;
             }
 
+            // For count_objects: upload original file + target class from input
+            if (mode === 'count_objects') {
+                showPreview(lastOriginalDataURL);
+                try {
+                    const targetClass = (countClassInput && countClassInput.value.trim()) || 'all';
+                    console.log('[count_objects] sending target_class:', targetClass);  // DEBUG
+                    const extras = { target_class: targetClass };
+                    const resp = await uploadFileToServer(lastOriginalFile, 'count_objects', extras);
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                        resultText.textContent = (resp.message || 'Đã đếm đối tượng') + paramsText;
+                    } else {
+                        resultText.textContent = 'Không có phản hồi từ server cho count_objects.';
+                    }
+                } catch (err) {
+                    resultText.textContent = 'Lỗi khi đếm: ' + (err && err.message ? err.message : String(err));
+                } finally {
+                    dropArea.classList.remove('loading');
+                }
+                return;
+            }
+
+            // For denoise: auto noise detection + removal
+            if (mode === 'denoise') {
+                showPreview(lastOriginalDataURL);
+                try {
+                    console.log('[denoise] uploading file:', lastOriginalFile && lastOriginalFile.name);
+                    const resp = await uploadFileToServer(lastOriginalFile, 'denoise');
+                    console.log('[denoise] server response:', resp);
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                        resultText.textContent = (resp.message || 'Đã xử lý nhiễu') + paramsText;
+                    } else {
+                        resultText.textContent = 'Không có phản hồi từ server cho denoise.';
+                    }
+                } catch (err) {
+                    console.error('[denoise] upload/process error:', err);
+                    resultText.textContent = 'Lỗi khi xử lý nhiễu: ' + (err && err.message ? err.message : String(err));
+                } finally {
+                    dropArea.classList.remove('loading');
+                }
+                return;
+            }
+
             // existing client-side branches for other modes
             let processed = lastOriginalDataURL;
             if (mode === 'gray8') {
@@ -304,6 +355,41 @@ if (r1Input) r1Input.addEventListener('keydown', piecewiseEnterHandler);
 if (s1Input) s1Input.addEventListener('keydown', piecewiseEnterHandler);
 if (r2Input) r2Input.addEventListener('keydown', piecewiseEnterHandler);
 if (s2Input) s2Input.addEventListener('keydown', piecewiseEnterHandler);
+
+// Enter in countClassInput -> re-run count_objects with new target class
+if (countClassInput) {
+    countClassInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+            e.preventDefault();
+            const inputValue = countClassInput.value.trim();
+            console.log('[countClassInput Enter] value:', inputValue);  // DEBUG
+            // ensure mode is count_objects
+            if (modeSelect) modeSelect.value = 'count_objects';
+            // re-run processing with lastOriginalFile
+            if (lastOriginalFile) {
+                // Force immediate upload with current input value
+                (async () => {
+                    try {
+                        showPreview(lastOriginalDataURL);
+                        const targetClass = inputValue || 'all';
+                        console.log('[countClassInput Enter] forcing target_class:', targetClass);
+                        const extras = { target_class: targetClass };
+                        const resp = await uploadFileToServer(lastOriginalFile, 'count_objects', extras);
+                        if (resp && resp.dataURL) {
+                            showPreview(resp.dataURL);
+                            const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                            resultText.textContent = (resp.message || 'Đã đếm đối tượng') + paramsText;
+                        }
+                    } catch (err) {
+                        resultText.textContent = 'Lỗi khi đếm: ' + (err && err.message ? err.message : String(err));
+                    }
+                })();
+            } else if (modeSelect) {
+                modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+    });
+}
 
 // Auto checkbox: when toggled, hide gamma input and (optionally) hide piecewise inputs.
 // Show Auto only for gamma/piecewise is handled in modeSelect.change above.
@@ -413,16 +499,13 @@ export async function handleFile(file){
                 const p = resp.params ? ('\n' + JSON.stringify(resp.params)) : '';
                 resultText.textContent = msg + p;
             } else {
-                resultText.textContent = 'Ảnh đã tải lên nhưng server không trả dataURL.';
+                resultText.textContent = 'Không có dữ liệu trả về từ server.';
             }
         } catch (err) {
-            resultText.textContent = 'Lỗi server: ' + (err && err.message ? err.message : String(err));
+            resultText.textContent = 'Lỗi khi tải lên server: ' + (err && err.message ? err.message : String(err));
         } finally {
             dropArea.classList.remove('loading');
         }
-    };
-    reader.onerror = ()=>{
-        resultText.textContent = 'Không thể đọc file.';
     };
     reader.readAsDataURL(file);
 }

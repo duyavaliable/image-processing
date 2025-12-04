@@ -78,45 +78,170 @@ def api_process():
             params = {'label': best_label, 'distance': best_dist, 'reconstruction_error': rec_err, 'unknown': bool(unknown)}
             return jsonify({'dataURL': to_data_url_png(color), 'message': 'pca_nn_ok', 'params': params}), 200
 
-        if mode == 'detect':
-            # Object detection using OpenCV DNN (MobileNet-SSD example).
-            # Place MobileNetSSD_deploy.prototxt and MobileNetSSD_deploy.caffemodel in ./models/
-            proto = os.path.join('models', 'MobileNetSSD_deploy.prototxt')
-            model_file = os.path.join('models', 'MobileNetSSD_deploy.caffemodel')
-            if not os.path.isfile(proto) or not os.path.isfile(model_file):
-                return jsonify({'error': 'missing detection model files in ./models/'}), 400
+
+        if mode == 'count_objects':
+            # Count specific object class using YOLO (requires models/yolov5s.onnx)
+            yolo_onnx = os.path.join('models', 'yolov5s.onnx')
+            if not os.path.isfile(yolo_onnx):
+                return jsonify({'error': 'Missing YOLO ONNX: models/yolov5s.onnx'}), 400
+            
             img_color = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img_color is None:
-                return jsonify({'error':'failed to decode color image for detection'}), 400
-
-            net = cv2.dnn.readNetFromCaffe(proto, model_file)
-            (h, w) = img_color.shape[:2]
-            blob = cv2.dnn.blobFromImage(cv2.resize(img_color, (300, 300)), 0.007843, (300, 300), 127.5)
+                return jsonify({'error':'failed to decode color image for counting'}), 400
+            
+            h0, w0 = img_color.shape[:2]
+            inp_size = int(request.form.get('inp_size', '640'))
+            blob = cv2.dnn.blobFromImage(img_color, 1/255.0, (inp_size, inp_size), [0,0,0], swapRB=True, crop=False)
+            net = cv2.dnn.readNetFromONNX(yolo_onnx)
             net.setInput(blob)
-            detections = net.forward()
-
-            CLASSES = ["background","aeroplane","bicycle","bird","boat","bottle","bus","car","cat","chair",
-                       "cow","diningtable","dog","horse","motorbike","person","pottedplant","sheep","sofa","train","tvmonitor"]
-            out_list = []
-            for i in range(detections.shape[2]):
-                score = float(detections[0, 0, i, 2])
-                if score < 0.4:
+            preds = net.forward()
+            if preds.ndim == 3:
+                preds = preds[0]
+            
+            boxes, confidences, class_ids = [], [], []
+            conf_thresh = float(request.form.get('conf_thresh', 0.25))
+            iou_thresh = float(request.form.get('iou_thresh', 0.45))
+            
+            for row in preds:
+                obj_conf = float(row[4])
+                if obj_conf <= 0.01:
                     continue
-                idx = int(detections[0, 0, i, 1])
-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                (startX, startY, endX, endY) = box.astype("int").tolist()
-                label = CLASSES[idx] if idx < len(CLASSES) else f'class_{idx}'
-                out_list.append({'label': label, 'score': round(score,3), 'box': [int(startX), int(startY), int(endX), int(endY)]})
-                # draw box + label on image
-                cv2.rectangle(img_color, (startX, startY), (endX, endY), (0, 255, 0), 2)
-                text = f"{label}: {int(score*100)}%"
-                y = startY - 10 if startY - 10 > 10 else startY + 10
-                cv2.putText(img_color, text, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+                class_scores = row[5:]
+                class_id = int(class_scores.argmax())
+                cls_conf = float(class_scores[class_id])
+                conf = obj_conf * cls_conf
+                if conf < conf_thresh:
+                    continue
+                x_c, y_c, ww, hh = row[0:4]
+                x = (x_c - ww/2) * w0 / inp_size
+                y = (y_c - hh/2) * h0 / inp_size
+                w = ww * w0 / inp_size
+                h = hh * h0 / inp_size
+                boxes.append([int(x), int(y), int(w), int(h)])
+                confidences.append(float(conf))
+                class_ids.append(int(class_id))
+            
+            indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, iou_thresh)
+            
+            CLASSES = ["person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light",
+                       "fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow",
+                       "elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee",
+                       "skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard",
+                       "tennis racket","bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
+                       "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair","couch",
+                       "potted plant","bed","dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone",
+                       "microwave","oven","toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear",
+                       "hair drier","toothbrush"]
+            
+            # Get target class from form (default 'all')
+            target_class = request.form.get('target_class', 'all').strip().lower()
+            print(f"[count_objects] target_class received: '{target_class}'")  # DEBUG
+            
+            count = 0
+            for i in (indices.flatten() if len(indices) else []):
+                x,y,w,h = boxes[i]
+                cls = class_ids[i] if i < len(class_ids) else -1
+                label = CLASSES[cls] if (isinstance(CLASSES, list) and cls < len(CLASSES)) else f'class_{cls}'
+                score = confidences[i]
+                
+                # Filter by target_class
+                # FIXED: ensure exact match (strip whitespace from both)
+                label_normalized = label.strip().lower()
+                target_normalized = target_class.strip().lower()
+                if target_normalized == 'all' or label_normalized == target_normalized:
+                    count += 1
+                    cv2.rectangle(img_color, (x,y), (x+w,y+h), (0,255,0), 2)
+                    cv2.putText(img_color, f"{label} {score:.2f}", (x, max(15,y-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+                else:
+                    # DEBUG: log skipped detections
+                    print(f"[count_objects] skipped: label='{label}' (normalized='{label_normalized}') vs target='{target_normalized}'")
+            
+            # Draw count overlay
+            text = f"Total: {count}" if target_class == 'all' else f"{target_class.capitalize()}: {count}"
+            cv2.putText(img_color, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,255), 3)
+            
+            params = {'count': count, 'target_class': target_class, 'backend':'yolo_count'}
+            return jsonify({'dataURL': to_data_url_png(img_color), 'message': f'Counted {count} {target_class}', 'params': params}), 200
 
-            img = img_color
-            params = {'detections': out_list, 'count': len(out_list)}
-            data_url = to_data_url_png(img)
-            return jsonify({'dataURL': data_url, 'message':'detect_ok', 'params': params}), 200
+        if mode == 'denoise':
+            # Auto noise detection + removal pipeline
+            img = ensure_gray_uint8_from_bytes(data)
+            
+            # Step 1: Detect noise type
+            noise_type, noise_params = detect_noise_type(img)
+            # DEBUG logs: raw detection info and types
+            print(f"[denoise] detected noise_type={noise_type}")
+            try:
+                print(f"[denoise] raw noise_params: {repr(noise_params)}")
+                for k, v in (noise_params.items() if isinstance(noise_params, dict) else []):
+                    try:
+                        print(f"[denoise] noise_params[{k}] type={type(v)} preview={str(v)[:200]}")
+                    except Exception:
+                        print(f"[denoise] noise_params[{k}] type={type(v)} (preview failed)")
+            except Exception:
+                print("[denoise] failed to print noise_params details")
+            
+            # Step 2: Apply filter based on noise type
+            if noise_type == 'salt_pepper':
+                img_denoised = adaptive_median_filter(img, max_size=7)
+                se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                img_denoised = cv2.morphologyEx(img_denoised, cv2.MORPH_OPEN, se)
+                method = 'Adaptive Median + Opening'
+            
+            elif noise_type == 'gaussian':
+                sigma = max(10, min(100, int(np.sqrt(noise_params.get('variance', 100)))))
+                img_denoised = cv2.bilateralFilter(img, 9, sigma, sigma)
+                method = 'Bilateral Filter'
+            
+            elif noise_type == 'periodic':
+                try:
+                    img_denoised, freqs = notch_filter_auto(img)
+                    method = 'Notch Filter'
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"[denoise] notch_filter_auto failed: {e!r} — falling back to bilateral")
+                    img_denoised = cv2.bilateralFilter(img, 9, 75, 75)
+                    freqs = []
+                    method = 'Notch Filter (failed->bilateral)'
+            
+            elif noise_type == 'speckle':
+                img_denoised = lee_filter(img, window_size=5)
+                method = 'Lee Filter'
+            
+            else:
+                img_denoised = cv2.bilateralFilter(img, 9, 75, 75)
+                method = 'Bilateral Filter (fallback)'
+            
+            # DEBUG: check img_denoised before encoding
+            print(f"[denoise] img_denoised dtype={img_denoised.dtype}, shape={img_denoised.shape}, sample={img_denoised[0,0] if img_denoised.size > 0 else 'empty'}")
+            
+            # Convert noise_params to JSON-safe structure and log
+            try:
+                noise_params_safe = numpy_to_python(noise_params)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[denoise] numpy_to_python failed: {e!r}; using repr fallback")
+                noise_params_safe = {'_error': str(e), 'raw': repr(noise_params)}
+            print(f"[denoise] noise_params_safe: {repr(noise_params_safe)[:1000]}")
+
+            # Encode to PNG dataURL
+            try:
+                dataURL = to_data_url_png(img_denoised)
+                print(f"[denoise] to_data_url_png returned dataURL length={len(dataURL) if dataURL else 0}")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[denoise] to_data_url_png failed: {e!r}")
+                dataURL = None
+            
+            params = {
+                'noise_type': noise_type,
+                'method': method,
+                'noise_params': noise_params_safe
+            }
+            return jsonify({'dataURL': dataURL, 'message': f'Denoised: {noise_type}', 'params': params}), 200
 
         # NOTE: 'pca' (legacy PCA denoising pipeline) removed to simplify server.
         # If client still sends mode='pca' return a clear error and point to supported modes.
@@ -377,6 +502,180 @@ def to_data_url_png(img):
         raise RuntimeError("Failed to encode image")
     b64 = base64.b64encode(buf).decode('ascii')
     return f"data:image/png;base64,{b64}"
+
+def detect_noise_type(img):
+    """
+    Detect noise type: salt_pepper, gaussian, periodic, speckle
+    Returns: (noise_type: str, params: dict)
+    """
+    H, W = img.shape
+    
+    # 1. Check salt-and-pepper (>1% extreme pixels)
+    n_black = int(np.sum(img == 0))
+    n_white = int(np.sum(img == 255))
+    extreme_ratio = float((n_black + n_white) / (H * W))
+    
+    if extreme_ratio > 0.01:
+        return ('salt_pepper', {'extreme_ratio': extreme_ratio, 'black': n_black, 'white': n_white})
+    
+    # 2. Check periodic noise (frequency domain peaks)
+    dft = cv2.dft(np.float32(img), flags=cv2.DFT_COMPLEX_OUTPUT)
+    dft_shift = np.fft.fftshift(dft)
+    magnitude = cv2.magnitude(dft_shift[:, :, 0], dft_shift[:, :, 1])
+    mag_log = np.log1p(magnitude)
+    
+    cy, cx = H // 2, W // 2
+    mask = np.ones((H, W), dtype=bool)
+    mask[cy-10:cy+10, cx-10:cx+10] = False  # exclude DC
+    
+    threshold = mag_log[mask].mean() + 3 * mag_log[mask].std()
+    peaks = np.where((mag_log > threshold) & mask)
+    
+    if len(peaks[0]) > 5:
+        peak_coords = [(int(peaks[0][i]), int(peaks[1][i])) for i in range(min(5, len(peaks[0])))]
+        return ('periodic', {'num_peaks': len(peaks[0]), 'peak_coords': peak_coords})
+    
+    # 3. Check Gaussian (moderate variance, no extreme pixels)
+    flat = img.flatten().astype(np.float32)
+    mean_val = float(np.mean(flat))
+    var = float(np.var(flat))
+    
+    if 100 < var < 2000:
+        return ('gaussian', {'mean': mean_val, 'variance': var})
+    
+    # 4. Check speckle (high coefficient of variation)
+    cv_val = float(np.std(flat) / (mean_val + 1e-12))
+    if cv_val > 0.3:
+        return ('speckle', {'cv': cv_val, 'variance': var})
+    
+    # fallback
+    return ('unknown', {'variance': var})
+
+def adaptive_median_filter(img, max_size=7):
+    """
+    Adaptive median filter for salt-and-pepper noise
+    """
+    H, W = img.shape
+    out = img.copy()
+    
+    def get_median(window):
+        return int(np.median(window))
+    
+    for y in range(H):
+        for x in range(W):
+            size = 3
+            while size <= max_size:
+                k = size // 2
+                y1, y2 = max(0, y-k), min(H, y+k+1)
+                x1, x2 = max(0, x-k), min(W, x+k+1)
+                window = img[y1:y2, x1:x2]
+                
+                z_min = int(window.min())
+                z_max = int(window.max())
+                z_med = get_median(window)
+                z_xy = int(img[y, x])
+                
+                # Stage A
+                if z_min < z_med < z_max:
+                    # Stage B
+                    if z_min < z_xy < z_max:
+                        out[y, x] = z_xy
+                    else:
+                        out[y, x] = z_med
+                    break
+                else:
+                    size += 2
+                    if size > max_size:
+                        out[y, x] = z_med
+    
+    return out
+
+def notch_filter_auto(img):
+    """Notch filter: remove periodic noise peaks in frequency domain"""
+    H, W = img.shape
+    dft = cv2.dft(np.float32(img), flags=cv2.DFT_COMPLEX_OUTPUT)
+    dft_shift = np.fft.fftshift(dft)
+    
+    magnitude = cv2.magnitude(dft_shift[:, :, 0], dft_shift[:, :, 1])
+    mag_log = np.log1p(magnitude)
+    
+    cy, cx = H // 2, W // 2
+    mask = np.ones((H, W), dtype=bool)
+    mask[cy-10:cy+10, cx-10:cx+10] = False
+    
+    threshold = mag_log[mask].mean() + 3 * mag_log[mask].std()
+    peaks = np.where((mag_log > threshold) & mask)
+    
+    print(f"[notch_filter_auto] found {len(peaks[0])} peaks")
+    
+    # Create notch mask (circular rejection)
+    notch_mask = np.ones((H, W, 2), dtype=np.float32)
+    for py, px in zip(peaks[0][:10], peaks[1][:10]):
+        yy, xx = np.ogrid[:H, :W]
+        dist = np.sqrt((xx - px)**2 + (yy - py)**2)
+        notch_mask[dist < 5] = 0
+    
+    dft_shift_filtered = dft_shift * notch_mask
+    dft_ishift = np.fft.ifftshift(dft_shift_filtered)
+    img_back = cv2.idft(dft_ishift)
+    img_back = cv2.magnitude(img_back[:, :, 0], img_back[:, :, 1])
+    
+    # CRITICAL: normalize to [0,255] uint8
+    # img_back might have values outside [0,255] after magnitude
+    img_min = img_back.min()
+    img_max = img_back.max()
+    print(f"[notch_filter_auto] img_back range: [{img_min}, {img_max}]")
+    
+    if img_max > img_min:
+        img_back = ((img_back - img_min) / (img_max - img_min) * 255.0)
+    else:
+        img_back = np.zeros_like(img_back)
+    
+    img_back = np.clip(img_back, 0, 255).astype(np.uint8)
+    print(f"[notch_filter_auto] output dtype={img_back.dtype}, shape={img_back.shape}, sample={img_back[0,0]}")
+    
+    peak_freqs = [(int(py), int(px)) for py, px in zip(peaks[0][:5], peaks[1][:5])]
+    return img_back, peak_freqs
+
+def lee_filter(img, window_size=5):
+    """
+    Lee filter for speckle noise (multiplicative noise)
+    """
+    H, W = img.shape
+    out = img.copy().astype(np.float32)
+    k = window_size // 2
+    
+    for y in range(k, H - k):
+        for x in range(k, W - k):
+            window = img[y-k:y+k+1, x-k:x+k+1].astype(np.float32)
+            mean_w = window.mean()
+            var_w = window.var()
+            
+            # Lee filter formula
+            if var_w > 0:
+                k_lee = var_w / (var_w + mean_w**2 / (mean_w + 1e-12))
+                out[y, x] = mean_w + k_lee * (img[y, x] - mean_w)
+            else:
+                out[y, x] = mean_w
+    
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+def numpy_to_python(obj):
+    """
+    Recursively convert NumPy types to Python native types for JSON serialization
+    """
+    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: numpy_to_python(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(numpy_to_python(x) for x in obj)
+    else:
+        return obj
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5500, debug=True)
