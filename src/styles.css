@@ -74,6 +74,29 @@ main{max-width:920px;margin:0 auto}
     margin-top:12px;
     flex-wrap:wrap;
 }
+
+/* Inline controls for new modes */
+#denoiseManualControls,
+#sharpeningControls,
+#freqFilterControls{
+    display:inline-flex;
+    gap:8px;
+    align-items:center;
+    flex-wrap:nowrap;
+}
+
+#denoiseManualControls select,
+#sharpeningControls select,
+#freqFilterControls select,
+#denoiseManualControls input,
+#sharpeningControls input,
+#freqFilterControls input{
+    font-size:0.9rem;
+    padding:4px 8px;
+    border:1px solid rgba(11,22,38,0.08);
+    border-radius:4px;
+}
+
 .btn{
     background:transparent;
     border:1px solid rgba(11,22,38,0.08);

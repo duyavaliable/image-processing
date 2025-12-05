@@ -21,30 +21,71 @@
                     <option value="log">Logarithmic Transformation</option>
                     <option value="gamma">Power‑Law (Gamma)</option>
                     <option value="piecewise">Piecewise Linear (Contrast Stretch)</option>
-                    <option value="count_objects">Đếm vật thể</option>
-                    <option value="denoise">Xử lý nhiễu (Auto)</option>
+                    <option value="count_objects">Nhận diện vật thể</option>
+                    <!-- REMOVED: denoise auto -->
+                    <!-- NEW: 5 modes -->
+                    <option value="denoise_manual">Xử lý nhiễu (Manual)</option>
+                    <option value="histogram_eq">Histogram Equalization</option>
+                    <option value="sharpening">Sharpening</option>
+                    <option value="frequency_filter">Frequency Filter (LPF/HPF)</option>
                 </select>
-                <label class="gamma-controls" style="display:inline-flex;align-items:center;gap:8px;margin-left:8px;">
-                    <input id="gammaAuto" type="checkbox" checked title="Auto‑detect gamma" />
-                    <span style="font-size:0.9rem;">Auto</span>
-                    <input id="gammaInput" type="number" step="0.1" min="0.1" max="10" placeholder="γ (ví dụ 0.6)" style="width:90px;margin-left:6px;" title="Nhập γ để ép giá trị (bỏ chọn Auto để dùng)" />
-                </label>
-                <!-- Piecewise params (hidden by default, shown when mode=piecewise) -->
-                <div id="piecewiseControls" style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;">
+                
+                <!-- Gamma manual input -->
+                <div id="gammaControls" style="display:none;margin-left:12px;gap:8px;align-items:center;">
+                    <label style="font-size:0.9rem;">γ:</label>
+                    <input id="gammaInput" type="number" step="0.1" min="0.1" max="10" value="0.6" style="width:90px;" />
+                </div>
+                
+                <!-- Piecewise params -->
+                <div id="piecewiseControls" style="display:none;align-items:center;gap:6px;margin-left:12px;">
                     <label style="font-size:0.9rem">r1</label><input id="r1Input" type="number" min="1" max="254" value="70" style="width:64px" />
                     <label style="font-size:0.9rem">s1</label><input id="s1Input" type="number" min="0" max="255" value="10" style="width:64px" />
                     <label style="font-size:0.9rem">r2</label><input id="r2Input" type="number" min="2" max="255" value="180" style="width:64px" />
                     <label style="font-size:0.9rem">s2</label><input id="s2Input" type="number" min="0" max="255" value="245" style="width:64px" />
                 </div>
-                <!-- Count objects controls (hidden by default) -->
+                
+                <!-- Threshold control -->
+                <div id="thresholdControls" style="display:none;margin-left:12px;gap:8px;align-items:center;">
+                    <label style="font-size:0.9rem;">Threshold (T):</label>
+                    <input id="thresholdInput" type="number" min="0" max="255" value="128" style="width:64px;" />
+                </div>
+                
+                
+                <!-- Count objects controls -->
                 <div id="countControls" class="count-controls" style="display:none;margin-left:12px;gap:8px;align-items:center;flex-wrap:nowrap;">
-                    <label style="font-size:0.9rem;">Đếm:</label>
-                    <input id="countClassInput" type="text" placeholder="person, car, hoặc 'all'" 
-                           style="width:180px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:0.9rem;" 
-                           title="Nhập tên đối tượng (ví dụ: person, car, dog) hoặc 'all' để đếm tất cả" />
-                    <small style="color:#666;font-size:0.8rem;white-space:nowrap;">
-                        (ví dụ: person, car, dog)
-                    </small>
+                </div>
+                
+                <!-- NEW: Denoise manual controls -->
+                <div id="denoiseManualControls" style="display:none;margin-left:12px;gap:8px;align-items:center;">
+                    <label style="font-size:0.9rem;">Method:</label>
+                    <select id="denoiseMethodSelect" style="padding:4px 8px;border-radius:4px;">
+                        <option value="median">Median (Salt&Pepper)</option>
+                        <option value="bilateral">Bilateral (Gaussian)</option>
+                        <option value="nlm">Non-local Means (Gaussian)</option>
+                    </select>
+                    <label style="font-size:0.9rem;">Kernel:</label>
+                    <input id="denoiseKernelInput" type="number" min="3" max="31" step="2" value="5" style="width:64px;" />
+                </div>
+                
+                <!-- NEW: Sharpening controls -->
+                <div id="sharpeningControls" style="display:none;margin-left:12px;gap:8px;align-items:center;">
+                    <label style="font-size:0.9rem;">Type:</label>
+                    <select id="sharpeningTypeSelect" style="padding:4px 8px;border-radius:4px;">
+                        <option value="laplacian">Laplacian</option>
+                    </select>
+                </div>
+                
+                <!-- NEW: Frequency filter controls -->
+                <div id="freqFilterControls" style="display:none;margin-left:12px;gap:8px;align-items:center;">
+                    <label style="font-size:0.9rem;">Filter:</label>
+                    <select id="freqFilterTypeSelect" style="padding:4px 8px;border-radius:4px;">
+                        <option value="lowpass_gaussian">Lowpass (Gaussian)</option>
+                        <option value="highpass_gaussian">Highpass (Gaussian)</option>
+                    </select>
+                    <label style="font-size:0.9rem;">Cutoff:</label>
+                    <input id="freqCutoffInput" type="number" min="5" max="200" value="30" style="width:64px;" />
+                    <label style="font-size:0.9rem;">Order (n):</label>
+                    <input id="freqOrderInput" type="number" min="1" max="10" value="2" style="width:64px;" />
                 </div>
             </div>
             <button id="uploadBtn" class="btn primary" type="button">Tải ảnh lên</button>

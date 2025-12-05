@@ -40,92 +40,73 @@ const clearBtn = document.getElementById('clearBtn');
 const controls = document.getElementById('controls');
 const modeSelect = document.getElementById('modeSelect');
 const gammaInput = document.getElementById('gammaInput');
-const gammaAuto = document.getElementById('gammaAuto');
+const gammaControls = document.getElementById('gammaControls');
 const piecewiseControls = document.getElementById('piecewiseControls');
 const r1Input = document.getElementById('r1Input');
 const s1Input = document.getElementById('s1Input');
 const r2Input = document.getElementById('r2Input');
 const s2Input = document.getElementById('s2Input');
 const countControls = document.getElementById('countControls');
-const countClassInput = document.getElementById('countClassInput');
+const denoiseManualControls = document.getElementById('denoiseManualControls');
+const denoiseMethodSelect = document.getElementById('denoiseMethodSelect');
+const denoiseKernelInput = document.getElementById('denoiseKernelInput');
+const sharpeningControls = document.getElementById('sharpeningControls');
+const sharpeningTypeSelect = document.getElementById('sharpeningTypeSelect');
+const freqFilterControls = document.getElementById('freqFilterControls');
+const freqFilterTypeSelect = document.getElementById('freqFilterTypeSelect');
+const freqCutoffInput = document.getElementById('freqCutoffInput');
+const freqOrderInput = document.getElementById('freqOrderInput');
+const thresholdControls = document.getElementById('thresholdControls');
+const thresholdInput = document.getElementById('thresholdInput');
 if (clearBtn) clearBtn.addEventListener('click', ()=> resetAll());
 
-const uploadBtn = document.getElementById('uploadBtn');
-if (uploadBtn && fileInput) {
-    uploadBtn.addEventListener('click', ()=> fileInput.click());
+// Helper: update controls visibility based on mode
+function updateControlsVisibility(mode) {
+    // show/hide piecewise controls only when mode is piecewise
+    if (piecewiseControls) piecewiseControls.style.display = (mode === 'piecewise') ? '' : 'none';
+
+    // show/hide count controls only when mode is count_objects
+    if (countControls) countControls.style.display = (mode === 'count_objects') ? 'inline-flex' : 'none';
+    
+    // show/hide denoise manual controls
+    if (denoiseManualControls) denoiseManualControls.style.display = (mode === 'denoise_manual') ? 'inline-flex' : 'none';
+    
+    // show/hide sharpening controls
+    if (sharpeningControls) sharpeningControls.style.display = (mode === 'sharpening') ? 'inline-flex' : 'none';
+    
+    // show/hide frequency filter controls
+    if (freqFilterControls) freqFilterControls.style.display = (mode === 'frequency_filter') ? 'inline-flex' : 'none';
+    
+    // show/hide threshold control
+    if (thresholdControls) thresholdControls.style.display = (mode === 'threshold') ? 'inline-flex' : 'none';
+
+    if (gammaControls) gammaControls.style.display = (mode === 'gamma') ? 'inline-flex' : 'none';
 }
 
-// cache for loaded libraries / model
-let cached = {
-    tf: null,
-    mobilenet: null,
-    model: null,
-    loadingPromise: null
-};
+// Initialize on page load
+function initializeControlsVisibility() {
+    const mode = (modeSelect && modeSelect.value) || 'gray8';
+    updateControlsVisibility(mode);
+}
+initializeControlsVisibility();
 
-// --- ADD: keep original File for server uploads ---
-let lastOriginalFile = null;
-let lastOriginalDataURL = null;
-
-// --- NEW: manual-override flags for gamma & piecewise ---
-let forceManualGamma = false;
-let forceManualPiecewise = false;
-
-// collect extras to send to server (respects one-time manual overrides)
-//xử lý auto tự động
-function collectExtrasForMode(mode){
-    const extras = {};
-    if (mode === 'gamma') {
-        // Auto has priority: if checkbox checked => send auto flag.
-        if (gammaAuto && gammaAuto.checked) {
-            extras.auto = '1';
-        } else {
-            // Auto is off => use manual gamma if present (or one-time override)
-            const v = parseFloat((gammaInput && gammaInput.value) || '');
-            if (!isNaN(v) && (forceManualGamma || v !== 0)) extras.gamma = v;
+// Upload button: trigger file input click
+const uploadBtn = document.getElementById('uploadBtn');
+if (uploadBtn) {
+    uploadBtn.addEventListener('click', () => {
+        if (fileInput) {
+            fileInput.click(); // programmatically open file picker
         }
-    } else if (mode === 'piecewise') {
-        // Auto has priority: if checked -> send auto flag.
-        if (gammaAuto && gammaAuto.checked) {
-            extras.auto = '1';
-        } else {
-            // Auto off -> use manual piecewise params (or one-time override)
-            const r1 = parseInt((r1Input && r1Input.value) || 70, 10);
-            const s1 = parseInt((s1Input && s1Input.value) || 10, 10);
-            const r2 = parseInt((r2Input && r2Input.value) || 180, 10);
-            const s2 = parseInt((s2Input && s2Input.value) || 245, 10);
-            if (!isNaN(r1)) extras.r1 = r1;
-            if (!isNaN(s1)) extras.s1 = s1;
-            if (!isNaN(r2)) extras.r2 = r2;
-            if (!isNaN(s2)) extras.s2 = s2;
-        }
-    }
-    // console.log('[collectExtrasForMode] mode=', mode, 'extras=', extras);
-    return extras;
+    });
 }
 
 // handle mode change
 if (modeSelect) {
     modeSelect.addEventListener('change', async () => {
         const mode = modeSelect.value || 'gray8';
-        // console.log('[modeSelect.change] mode=', mode, 'forceManualGamma=', forceManualGamma, 'forceManualPiecewise=', forceManualPiecewise);
-
-        // show/hide piecewise controls only when mode is piecewise
-        if (piecewiseControls) piecewiseControls.style.display = (mode === 'piecewise') ? '' : 'none';
-
-        // show/hide count controls only when mode is count_objects
-        if (countControls) countControls.style.display = (mode === 'count_objects') ? 'inline-flex' : 'none';
-
-        // Auto checkbox should be visible only for gamma or piecewise modes
-        // gammaAuto is the checkbox element; its parent label contains text + input
-        if (gammaAuto && gammaAuto.parentElement) {
-            gammaAuto.parentElement.style.display = (mode === 'gamma' || mode === 'piecewise') ? '' : 'none';
-        }
-
-        // gammaInput visible only when mode is gamma AND Auto is unchecked
-        if (gammaInput) {
-            gammaInput.style.display = (mode === 'gamma' && !(gammaAuto && gammaAuto.checked)) ? '' : 'none';
-        }
+        
+        // Update controls visibility
+        updateControlsVisibility(mode);
         
          if (!lastOriginalDataURL) return; // chưa có ảnh để xử lý
 
@@ -158,8 +139,8 @@ if (modeSelect) {
         try {
             // For negative: do NOT process on client, send original file to server.
             if (mode === 'negative') {
-                // preview original immediately
-                showPreview(lastOriginalDataURL);
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang xử lý negative trên server...';
                 try {
                     const resp = await uploadFileToServer(lastOriginalFile, mode);
                     if (resp && resp.dataURL) {
@@ -171,9 +152,30 @@ if (modeSelect) {
                 }
                 return;
             }
+            
+            // For threshold: send to server (avoid client-side JPEG decode issues)
+            if (mode === 'threshold') {
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang xử lý threshold trên server...';
+                try {
+                    const T = parseInt((thresholdInput && thresholdInput.value) || '128', 10);
+                    const extras = { threshold: T };
+                    const resp = await uploadFileToServer(lastOriginalFile, 'threshold', extras);
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                        resultText.textContent = (resp.message || `Thresholded (T=${T})`) + paramsText;
+                    }
+                } catch (err) {
+                    resultText.textContent = 'Lỗi threshold: ' + (err && err.message ? err.message : String(err));
+                }
+                return;
+            }
+
             // For gamma: send original file to server (server will auto-detect or use provided gamma)
             if (mode === 'gamma') {
-                showPreview(lastOriginalDataURL);
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang xử lý gamma trên server...';
                 // use collectExtrasForMode to ensure auto/manual behavior is consistent
                 const extras = collectExtrasForMode('gamma');
                 // console.log('[handleFile] gamma branch extras=', extras);
@@ -189,16 +191,14 @@ if (modeSelect) {
                 } catch (err) {
                     resultText.textContent = 'Lỗi khi áp dụng chế độ: ' + (err && err.message ? err.message : String(err));
                 } finally {
-                    // clear one-time manual flags after upload
-                    forceManualGamma = false;
-                    forceManualPiecewise = false;
                     dropArea.classList.remove('loading');
                 }
                 return;
             }
             // For log: do NOT process on client, send original file to server.
             if (mode === 'log' || mode === 'logarithmic') {
-                showPreview(lastOriginalDataURL);
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang xử lý log trên server...';
                 try {
                     const resp = await uploadFileToServer(lastOriginalFile, 'log');
                     if (resp && resp.dataURL) {
@@ -213,7 +213,8 @@ if (modeSelect) {
 
             // For detect: upload original file and show detection result returned by server
             if (mode === 'detect') {
-                showPreview(lastOriginalDataURL);
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang phát hiện đối tượng...';
                 try {
                     // extras can include detection threshold later if needed
                     const resp = await uploadFileToServer(lastOriginalFile, 'detect');
@@ -234,44 +235,139 @@ if (modeSelect) {
 
             // For count_objects: upload original file + target class from input
             if (mode === 'count_objects') {
-                showPreview(lastOriginalDataURL);
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang nhận diện đối tượng...';
                 try {
-                    const targetClass = (countClassInput && countClassInput.value.trim()) || 'all';
-                    console.log('[count_objects] sending target_class:', targetClass);  // DEBUG
+                    const targetClass = 'all';
+                    console.log('[count_objects] sending target_class:', targetClass);
                     const extras = { target_class: targetClass };
                     const resp = await uploadFileToServer(lastOriginalFile, 'count_objects', extras);
                     if (resp && resp.dataURL) {
                         showPreview(resp.dataURL);
-                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
-                        resultText.textContent = (resp.message || 'Đã đếm đối tượng') + paramsText;
+                        // THAY ĐỔI: chỉ hiển thị message, không hiển thị params
+                        resultText.textContent = resp.message || 'Đã nhận diện đối tượng';
                     } else {
                         resultText.textContent = 'Không có phản hồi từ server cho count_objects.';
                     }
                 } catch (err) {
-                    resultText.textContent = 'Lỗi khi đếm: ' + (err && err.message ? err.message : String(err));
+                    resultText.textContent = 'Lỗi khi nhận diện: ' + (err && err.message ? err.message : String(err));
                 } finally {
                     dropArea.classList.remove('loading');
                 }
                 return;
             }
 
-            // For denoise: auto noise detection + removal
-            if (mode === 'denoise') {
-                showPreview(lastOriginalDataURL);
+            // For denoise_manual: upload original file + method/kernel from controls
+            if (mode === 'denoise_manual') {
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang xử lý nhiễu...';
                 try {
-                    console.log('[denoise] uploading file:', lastOriginalFile && lastOriginalFile.name);
-                    const resp = await uploadFileToServer(lastOriginalFile, 'denoise');
-                    console.log('[denoise] server response:', resp);
+                    const method = (denoiseMethodSelect && denoiseMethodSelect.value) || 'median';
+                    const kernel = parseInt((denoiseKernelInput && denoiseKernelInput.value) || '5', 10);
+                    console.log('[denoise_manual] method:', method, 'kernel:', kernel);
+                    const extras = { method: method, kernel: kernel };
+                    const resp = await uploadFileToServer(lastOriginalFile, 'denoise_manual', extras);
                     if (resp && resp.dataURL) {
                         showPreview(resp.dataURL);
                         const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
                         resultText.textContent = (resp.message || 'Đã xử lý nhiễu') + paramsText;
                     } else {
-                        resultText.textContent = 'Không có phản hồi từ server cho denoise.';
+                        resultText.textContent = 'Không có phản hồi từ server cho denoise_manual.';
                     }
                 } catch (err) {
-                    console.error('[denoise] upload/process error:', err);
+                    console.error('[denoise_manual] upload/process error:', err);
                     resultText.textContent = 'Lỗi khi xử lý nhiễu: ' + (err && err.message ? err.message : String(err));
+                } finally {
+                    dropArea.classList.remove('loading');
+                }
+                return;
+            }
+
+            // For histogram_eq: simple histogram equalization
+            if (mode === 'histogram_eq') {
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang histogram equalization...';
+                try {
+                    const resp = await uploadFileToServer(lastOriginalFile, 'histogram_eq');
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        resultText.textContent = resp.message || 'Histogram Equalized';
+                    } else {
+                        resultText.textContent = 'Không có phản hồi từ server cho histogram_eq.';
+                    }
+                } catch (err) {
+                    resultText.textContent = 'Lỗi histogram_eq: ' + (err && err.message ? err.message : String(err));
+                } finally {
+                    dropArea.classList.remove('loading');
+                }
+                return;
+            }
+
+            // For sharpening: Laplacian / High-boost / Unsharp
+            if (mode === 'sharpening') {
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang sharpening...';
+                try {
+                    const sharpType = (sharpeningTypeSelect && sharpeningTypeSelect.value) || 'laplacian';
+                    console.log('[sharpening] type:', sharpType);
+                    const extras = { sharp_type: sharpType };
+                    const resp = await uploadFileToServer(lastOriginalFile, 'sharpening', extras);
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                        resultText.textContent = (resp.message || 'Đã sharpening') + paramsText;
+                    } else {
+                        resultText.textContent = 'Không có phản hồi từ server cho sharpening.';
+                    }
+                } catch (err) {
+                    resultText.textContent = 'Lỗi sharpening: ' + (err && err.message ? err.message : String(err));
+                } finally {
+                    dropArea.classList.remove('loading');
+                }
+                return;
+            }
+
+            // For frequency_filter: LPF/HPF (Ideal/Butterworth/Gaussian)
+            if (mode === 'frequency_filter') {
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang lọc tần số...';
+                try {
+                    const filterType = (freqFilterTypeSelect && freqFilterTypeSelect.value) || 'lowpass_gaussian';
+                    const cutoff = parseFloat((freqCutoffInput && freqCutoffInput.value) || '30');
+                    const order = parseInt((freqOrderInput && freqOrderInput.value) || '2', 10);
+                    console.log('[frequency_filter] type:', filterType, 'cutoff:', cutoff, 'order:', order);
+                    const extras = { filter_type: filterType, cutoff: cutoff, order: order };
+                    const resp = await uploadFileToServer(lastOriginalFile, 'frequency_filter', extras);
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                        resultText.textContent = (resp.message || 'Đã lọc tần số') + paramsText;
+                    } else {
+                        resultText.textContent = 'Không có phản hồi từ server cho frequency_filter.';
+                    }
+                } catch (err) {
+                    resultText.textContent = 'Lỗi frequency_filter: ' + (err && err.message ? err.message : String(err));
+                } finally {
+                    dropArea.classList.remove('loading');
+                }
+                return;
+            }
+
+            // For wiener: Wiener filter (deblur)
+            if (mode === 'wiener') {
+                preview.innerHTML = '<div class="loader"></div>';
+                resultText.textContent = 'Đang Wiener filter...';
+                try {
+                    const resp = await uploadFileToServer(lastOriginalFile, 'wiener');
+                    if (resp && resp.dataURL) {
+                        showPreview(resp.dataURL);
+                        const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
+                        resultText.textContent = (resp.message || 'Đã Wiener filter') + paramsText;
+                    } else {
+                        resultText.textContent = 'Không có phản hồi từ server cho wiener.';
+                    }
+                } catch (err) {
+                    resultText.textContent = 'Lỗi wiener: ' + (err && err.message ? err.message : String(err));
                 } finally {
                     dropArea.classList.remove('loading');
                 }
@@ -282,8 +378,6 @@ if (modeSelect) {
             let processed = lastOriginalDataURL;
             if (mode === 'gray8') {
                 processed = await toGray8DataURL(lastOriginalDataURL);
-            } else if (mode === 'threshold') {
-                processed = await toThresholdDataURL(lastOriginalDataURL);
             } else if (mode === 'log' || mode === 'logarithmic') {
                 processed = await toLogDataURL(lastOriginalDataURL, 2.0);
             }
@@ -299,7 +393,6 @@ if (modeSelect) {
             }
         } finally {
             // clear one-time manual flags after any client-side branch that reaches here
-            forceManualGamma = false;
             forceManualPiecewise = false;
             dropArea.classList.remove('loading');
         }
@@ -311,14 +404,6 @@ if (gammaInput) {
     gammaInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.keyCode === 13) {
             e.preventDefault();
-            // console.log('[gammaInput] Enter pressed, value=', gammaInput.value);
-            forceManualGamma = true;
-            if (gammaAuto && gammaAuto.checked) {
-                gammaAuto.checked = false;
-                // update visibility immediately
-                if (gammaInput) gammaInput.style.display = (modeSelect && modeSelect.value === 'gamma' && !gammaAuto.checked) ? '' : 'none';
-            }
-            // ensure mode is gamma
             if (modeSelect) modeSelect.value = 'gamma';
             // re-run processing by calling handleFile with lastOriginalFile (if available)
             if (lastOriginalFile) {
@@ -336,13 +421,6 @@ if (gammaInput) {
 function piecewiseEnterHandler(e){
     if (e.key === 'Enter' || e.keyCode === 13) {
         e.preventDefault();
-        forceManualPiecewise = true;
-        // user intends manual -> turn Auto OFF so manual params are used
-        if (gammaAuto && gammaAuto.checked) {
-            gammaAuto.checked = false;
-            if (piecewiseControls) piecewiseControls.style.display = (modeSelect && modeSelect.value === 'piecewise' && !gammaAuto.checked) ? '' : 'none';
-            if (gammaInput) gammaInput.style.display = (modeSelect && modeSelect.value === 'gamma' && !gammaAuto.checked) ? '' : 'none';
-        }
         if (modeSelect) modeSelect.value = 'piecewise';
         if (lastOriginalFile) {
             handleFile(lastOriginalFile).catch(()=>{ /* ignore */ });
@@ -356,34 +434,99 @@ if (s1Input) s1Input.addEventListener('keydown', piecewiseEnterHandler);
 if (r2Input) r2Input.addEventListener('keydown', piecewiseEnterHandler);
 if (s2Input) s2Input.addEventListener('keydown', piecewiseEnterHandler);
 
-// Enter in countClassInput -> re-run count_objects with new target class
-if (countClassInput) {
-    countClassInput.addEventListener('keydown', (e) => {
+
+
+// Enter in denoiseKernelInput or denoiseMethodSelect -> re-run denoise_manual
+if (denoiseKernelInput) {
+    denoiseKernelInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.keyCode === 13) {
             e.preventDefault();
-            const inputValue = countClassInput.value.trim();
-            console.log('[countClassInput Enter] value:', inputValue);  // DEBUG
-            // ensure mode is count_objects
-            if (modeSelect) modeSelect.value = 'count_objects';
-            // re-run processing with lastOriginalFile
+            console.log('[denoiseKernelInput Enter] kernel:', denoiseKernelInput.value);
+            if (modeSelect) modeSelect.value = 'denoise_manual';
             if (lastOriginalFile) {
-                // Force immediate upload with current input value
-                (async () => {
-                    try {
-                        showPreview(lastOriginalDataURL);
-                        const targetClass = inputValue || 'all';
-                        console.log('[countClassInput Enter] forcing target_class:', targetClass);
-                        const extras = { target_class: targetClass };
-                        const resp = await uploadFileToServer(lastOriginalFile, 'count_objects', extras);
-                        if (resp && resp.dataURL) {
-                            showPreview(resp.dataURL);
-                            const paramsText = resp.params ? ('\n' + JSON.stringify(resp.params, null, 2)) : '';
-                            resultText.textContent = (resp.message || 'Đã đếm đối tượng') + paramsText;
-                        }
-                    } catch (err) {
-                        resultText.textContent = 'Lỗi khi đếm: ' + (err && err.message ? err.message : String(err));
-                    }
-                })();
+                handleFile(lastOriginalFile).catch(()=>{});
+            } else if (modeSelect) {
+                modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+    });
+    
+    // Input event: re-process when user changes kernel (without pressing Enter)
+    denoiseKernelInput.addEventListener('input', () => {
+        console.log('[denoiseKernelInput input] kernel:', denoiseKernelInput.value);
+        // Debounce: only re-process after user stops typing for 800ms
+        clearTimeout(window.denoiseKernelDebounce);
+        window.denoiseKernelDebounce = setTimeout(() => {
+            if (modeSelect && modeSelect.value === 'denoise_manual' && lastOriginalFile) {
+                console.log('[denoiseKernelInput input] debounced re-process, kernel:', denoiseKernelInput.value);
+                handleFile(lastOriginalFile).catch(()=>{});
+            }
+        }, 800);
+    });
+}
+
+// Change event for denoiseMethodSelect (user changes method dropdown)
+if (denoiseMethodSelect) {
+    denoiseMethodSelect.addEventListener('input', () => {
+        console.log('[denoiseMethodSelect input] method:', denoiseMethodSelect.value);
+        if (modeSelect && modeSelect.value === 'denoise_manual') {
+            if (lastOriginalFile) {
+                handleFile(lastOriginalFile).catch(()=>{});
+            }
+        }
+    });
+}
+
+// Change event for sharpeningTypeSelect
+if (sharpeningTypeSelect) {
+    sharpeningTypeSelect.addEventListener('change', () => {
+        console.log('[sharpeningTypeSelect change] type:', sharpeningTypeSelect.value);
+        
+        if (modeSelect && modeSelect.value === 'sharpening') {
+            if (lastOriginalFile) {
+                handleFile(lastOriginalFile).catch(()=>{});
+            }
+        }
+    });
+}
+
+// Enter in freqCutoffInput or freqOrderInput -> re-run frequency_filter
+function freqFilterEnterHandler(e) {
+    if (e.key === 'Enter' || e.keyCode === 13) {
+        e.preventDefault();
+        console.log('[freqFilter Enter] cutoff:', freqCutoffInput.value, 'order:', freqOrderInput.value);
+        if (modeSelect) modeSelect.value = 'frequency_filter';
+        if (lastOriginalFile) {
+            handleFile(lastOriginalFile).catch(()=>{});
+        } else if (modeSelect) {
+            modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }
+}
+if (freqCutoffInput) freqCutoffInput.addEventListener('keydown', freqFilterEnterHandler);
+if (freqOrderInput) freqOrderInput.addEventListener('keydown', freqFilterEnterHandler);
+
+// Change event for freqFilterTypeSelect
+if (freqFilterTypeSelect) {
+    freqFilterTypeSelect.addEventListener('change', () => {
+        console.log('[freqFilterTypeSelect change] type:', freqFilterTypeSelect.value);
+        if (modeSelect && modeSelect.value === 'frequency_filter') {
+            if (lastOriginalFile) {
+                handleFile(lastOriginalFile).catch(()=>{});
+            }
+        }
+    });
+}
+
+// Enter in thresholdInput -> re-run threshold
+if (thresholdInput) {
+    thresholdInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+            e.preventDefault();
+            console.log('[thresholdInput Enter] T:', thresholdInput.value);
+            if (modeSelect) modeSelect.value = 'threshold';
+            if (lastOriginalFile) {
+                handleFile(lastOriginalFile).catch(()=>{});
             } else if (modeSelect) {
                 modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
             }
@@ -391,39 +534,9 @@ if (countClassInput) {
     });
 }
 
-// Auto checkbox: when toggled, hide gamma input and (optionally) hide piecewise inputs.
-// Show Auto only for gamma/piecewise is handled in modeSelect.change above.
-if (gammaAuto) {
-    // initial visibility for gammaInput and piecewiseControls
-    if (gammaInput) gammaInput.style.display = (modeSelect && modeSelect.value === 'gamma' && !gammaAuto.checked) ? '' : 'none';
-    if (piecewiseControls) piecewiseControls.style.display = (modeSelect && modeSelect.value === 'piecewise' && !gammaAuto.checked) ? '' : 'none';
-
-    gammaAuto.addEventListener('change', () => {
-        // gamma input visible only when mode is gamma and Auto unchecked
-        if (gammaInput) gammaInput.style.display = (modeSelect && modeSelect.value === 'gamma' && !gammaAuto.checked) ? '' : 'none';
-        // piecewise controls visible only when mode is piecewise and Auto unchecked
-        if (piecewiseControls) piecewiseControls.style.display = (modeSelect && modeSelect.value === 'piecewise' && !gammaAuto.checked) ? '' : 'none';
-
-        // re-run processing for active mode so server uses auto/manual as needed
-        if (modeSelect && (modeSelect.value === 'gamma' || modeSelect.value === 'piecewise')) {
-            if (lastOriginalFile) handleFile(lastOriginalFile).catch(()=>{});
-            else modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    });
-}
-
-// Global Enter: if mode is gamma and gammaInput has a numeric value -> force manual override once
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.keyCode === 13) {
-        if (modeSelect && modeSelect.value === 'gamma' && gammaInput) {
-            const v = parseFloat((gammaInput.value || '').trim());
-            if (!isNaN(v) && v !== 0) {
-                forceManualGamma = true;
-                modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    }
-});
+// Global state: store last uploaded image data
+let lastOriginalDataURL = false;
+let lastOriginalFile = false;
 
 //hien thi preview anh 
 export async function handleFile(file){
@@ -450,24 +563,29 @@ export async function handleFile(file){
         const isTiff = file && (file.type === 'image/tiff' || /\.tiff?$/i.test(file.name));
         const mode = (modeSelect && modeSelect.value) ? modeSelect.value : 'gray8';
 
+        // EARLY CHECK: if JPEG is too large or has complex metadata, skip client processing
+        const isJpeg = file && (file.type === 'image/jpeg' || /\.jpe?g$/i.test(file.name));
+        const skipClientProcessing = isTiff || (isJpeg && file.size > 200 * 1024); // > 200KB JPEG
+
         // determine processed preview to show (client-side where implemented)
         let processedDataURL = dataURL;
-        if (isTiff) {
+        if (skipClientProcessing) {
             // for TIFF rely on server preview; keep dataURL as-is for initial preview
             processedDataURL = dataURL;
         } else {
-            if (mode === 'gray8') {
-                processedDataURL = await toGray8DataURL(dataURL);
-            } else if (mode === 'threshold') {
-                processedDataURL = await toThresholdDataURL(dataURL);
-            } else if (mode === 'log' || mode === 'logarithmic') {
-                // best-effort preview client-side; fall back to original if conversion fails
-                try { processedDataURL = await toLogDataURL(dataURL, 2.0); } catch(e){ processedDataURL = dataURL; }
-            } else if (mode === 'median') {
-                // allowed client-side median preview (optional)
-                processedDataURL = await toMedianDataURL(dataURL, 3);
-            } else {
-                // for negative/gamma/piecewise and other server-side modes use original preview
+            // IMPROVED: wrap all client-side processing in try-catch with fallback
+            try {
+                if (mode === 'gray8') {
+                    processedDataURL = await toGray8DataURL(dataURL);
+                } else if (mode === 'log' || mode === 'logarithmic') {
+                    processedDataURL = await toLogDataURL(dataURL, 2.0);
+                } else if (mode === 'median') {
+                    processedDataURL = await toMedianDataURL(dataURL, 3);
+                } else {
+                    processedDataURL = dataURL;
+                }
+            } catch (clientProcessErr) {
+                console.warn('[handleFile] client-side processing failed, using original dataURL:', clientProcessErr);
                 processedDataURL = dataURL;
             }
         }
@@ -507,22 +625,35 @@ export async function handleFile(file){
             dropArea.classList.remove('loading');
         }
     };
+    
+    reader.onerror = (err) => {
+        console.error('[handleFile] FileReader error:', err);
+        resultText.textContent = 'Lỗi khi đọc file: ' + (err && err.message ? err.message : String(err));
+        dropArea.classList.remove('loading');
+    };
+    
     reader.readAsDataURL(file);
 }
 
 export function resetAll(){
     try{
         preview.innerHTML = '';
+        // cleanup input preview objectURL if exists
+        const inputPreview = dropArea && dropArea.querySelector('.input-preview');
+        if (inputPreview) {
+            const objUrl = inputPreview.dataset.objectUrl;
+            if (objUrl) {
+                URL.revokeObjectURL(objUrl);
+                delete inputPreview.dataset.objectUrl;
+            }
+            inputPreview.remove();
+        }
         resultText.textContent = 'Chưa có ảnh';
         if(fileInput) fileInput.value = '';
     }catch(e){
         // ignore
     }
 }
-
-
-
-
 
 // helper: create image element and wait load
 // tai anh từ dataURL, URL http(s), hoặc Blob/File
@@ -556,9 +687,8 @@ function loadImageElement(src){
         };
         img.onerror = (ev)=>{
             if (objectUrl) { URL.revokeObjectURL(objectUrl); }
-            // debug help: log actual src type/length to console (can be removed later)
-            try { console.debug('loadImageElement failed for src type:', typeof src, src && (src.size || src.length || (''+src).slice(0,64))); } catch(e){}
-            reject(new Error('Không thể tải ảnh để phân tích.'));
+            // SILENT: don't log here — caller will log if final fallback fails
+            reject(new Error('Image decode failed (possibly corrupted JPEG/metadata)'));
         };
     });
 }
@@ -609,31 +739,6 @@ async function toNegativeDataURL(srcDataURL){
         data[i+1] = inv;
         data[i+2] = inv;
        
-    }
-    ctx.putImageData(imageData, 0, 0);
-    return canvas.toDataURL('image/png');
-}
-
-//Thresholding (Binary)
-async function toThresholdDataURL(srcDataURL, T = 128){
-    const img = await loadImageElement(srcDataURL);
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(img, 0, 0, w, h);
-    const imageData = ctx.getImageData(0, 0, w, h);
-    const data = imageData.data;
-    for(let i = 0; i < data.length; i += 4){
-        const r = data[i], g = data[i+1], b = data[i+2];
-        const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-        const v = gray > T ? 255 : 0;
-        data[i] = v;
-        data[i+1] = v;
-        data[i+2] = v;
-        // alpha unchanged
     }
     ctx.putImageData(imageData, 0, 0);
     return canvas.toDataURL('image/png');
@@ -791,11 +896,31 @@ async function uploadFileToServer(fileOrBlob, mode='gray8', extras = {}){
     return j;
 }
 
-// show original image in the input / drop area for quick visual feedback . Hiện thị ảnh ở Input 
+// show original image in the input / drop area for quick visual feedback
 function showInputPreview(src){
-    if(!dropArea) return;
+    console.log('[showInputPreview] START', {
+        srcType: typeof src,
+        srcConstructor: src && src.constructor && src.constructor.name,
+        srcSize: src instanceof Blob ? src.size : (typeof src === 'string' ? src.length : 'N/A'),
+        srcName: src instanceof File ? src.name : 'N/A'
+    });
+    
+    if(!dropArea) {
+        console.warn('[showInputPreview] dropArea not found, aborting');
+        return;
+    }
+    
     const existing = dropArea.querySelector('.input-preview');
-    if(existing) existing.remove();
+    if(existing) {
+        console.log('[showInputPreview] removing existing preview');
+        const objUrl = existing.dataset.objectUrl;
+        if (objUrl) {
+            URL.revokeObjectURL(objUrl);
+            delete existing.dataset.objectUrl;
+            console.log('[showInputPreview] revoked objectURL:', objUrl.slice(0, 50));
+        }
+        existing.remove();
+    }
 
     const img = document.createElement('img');
     img.className = 'input-preview';
@@ -809,75 +934,125 @@ function showInputPreview(src){
 
     const controlsEl = dropArea.querySelector('#controls') || dropArea.firstChild;
     dropArea.insertBefore(img, controlsEl);
+    console.log('[showInputPreview] img element inserted into DOM');
 
-    // Helper: try to set src and await decode
-    const trySet = async (url)=>{
-        try {
-            img.src = url;
-            if (img.decode) await img.decode();
-            img.style.visibility = 'visible';
-            return true;
-        } catch(e){
-            return false;
-        }
+    const trySet = (url)=>{
+        return new Promise((resolve)=>{
+            img.onload = ()=>{
+                img.style.visibility = 'visible';
+                resolve(true);
+            };
+            img.onerror = (e)=>{
+                // SILENT: caller will handle fallback next
+                resolve(false);
+            };
+            try {
+                img.src = url;
+            } catch(e){
+                resolve(false);
+            }
+        });
     };
 
     (async ()=>{
-        // 1) If File/Blob and it's TIFF -> ask server to convert & return PNG dataURL
-        if (src instanceof File || src instanceof Blob) {
-            const t = (src.type || '').toLowerCase();
-            const name = (src.name || '').toLowerCase();
-            const isTiff = t === 'image/tiff' || /\.tiff?$/i.test(name);
-            if (isTiff) {
-                // show temporary placeholder (optional)
-                resultText.textContent = 'Đang tạo preview từ server...';
+        try {
+            // 1) If File/Blob and it's TIFF -> ask server to convert & return PNG dataURL
+            if (src instanceof File || src instanceof Blob) {
+                console.log('[showInputPreview] src is File/Blob, checking TIFF');
+                const t = (src.type || '').toLowerCase();
+                const name = (src.name || '').toLowerCase();
+                const isTiff = t === 'image/tiff' || /\.tiff?$/i.test(name);
+                console.log('[showInputPreview] isTiff:', isTiff, 'type:', t, 'name:', name);
+                
+                if (isTiff) {
+                    console.log('[showInputPreview] uploading TIFF to server for preview...');
+                    resultText.textContent = 'Đang tạo preview từ server...';
+                    try {
+                        const resp = await uploadFileToServer(src, 'gray8');
+                        console.log('[showInputPreview] server TIFF response:', resp && Object.keys(resp));
+                        if (resp && resp.dataURL) {
+                            console.log('[showInputPreview] trying server dataURL, length:', resp.dataURL.length);
+                            const ok = await trySet(resp.dataURL);
+                            if (ok) {
+                                console.log('[showInputPreview] ✅ TIFF preview success via server');
+                                return;
+                            } else {
+                                console.warn('[showInputPreview] ❌ TIFF preview failed even with server dataURL');
+                            }
+                        } else {
+                            console.warn('[showInputPreview] server response missing dataURL');
+                        }
+                    } catch (err) {
+                        console.error('[showInputPreview] server TIFF preview error:', err);
+                    }
+                    console.log('[showInputPreview] TIFF preview failed, removing img');
+                    img.remove();
+                    return;
+                }
+                
+                // not TIFF: try objectURL
                 try {
-                    const resp = await uploadFileToServer(src, 'gray8'); // server sẽ trả dataURL PNG
-                    if (resp && resp.dataURL) {
-                        await trySet(resp.dataURL);
-                        resultText.textContent = 'Preview (từ server) sẵn sàng.';
+                    const obj = URL.createObjectURL(src);
+                    const ok = await trySet(obj);
+                    if (ok) {
+                        img.dataset.objectUrl = obj;
                         return;
                     } else {
-                        resultText.textContent = 'Không nhận được preview từ server.';
+                        // SILENT: will try server fallback next
+                        URL.revokeObjectURL(obj);
                     }
-                } catch (err) {
-                    console.error('[showInputPreview] server preview error', err);
-                    resultText.textContent = 'Lỗi tạo preview từ server.';
+                } catch(e){
+                    // SILENT: will try server fallback
                 }
-                img.remove();
-                return;
-            }
-            // not TIFF: try objectURL
-            try {
-                const obj = URL.createObjectURL(src);
-                const ok = await trySet(obj);
-                if (ok) { URL.revokeObjectURL(obj); return; }
-                URL.revokeObjectURL(obj);
-            } catch(e){
-                /* ignore */
-            }
-        }
-
-        // 2) If string dataURL (or other string) -> try directly
-        if (typeof src === 'string') {
-            const ok = await trySet(src);
-            if (ok) return;
-
-            // if it was a data:image/tiff and failed, upload original file if available
-            if (lastOriginalFile) {
+                
+                // FALLBACK: try uploading to server for preview (robust decode)
                 try {
-                    const resp = await uploadFileToServer(lastOriginalFile, 'gray8');
+                    const resp = await uploadFileToServer(src, 'gray8');
                     if (resp && resp.dataURL) {
-                        await trySet(resp.dataURL);
-                        resultText.textContent = 'Preview (từ server) sẵn sàng.';
-                        return;
+                        const ok2 = await trySet(resp.dataURL);
+                        if (ok2) {
+                            console.log('[showInputPreview] ✅ server preview success');
+                            return;
+                        }
                     }
-                } catch(e){}
+                } catch (serverErr) {
+                    console.warn('[showInputPreview] all preview attempts failed:', serverErr);
+                }
             }
-        }
 
-        // fallback: remove preview img
-        img.remove();
+            // 2) If string dataURL (or other string) -> try directly
+            if (typeof src === 'string') {
+                const ok = await trySet(src);
+                if (ok) {
+                    console.log('[showInputPreview] ✅ string src preview success');
+                    return;
+                }
+                console.warn('[showInputPreview] string src trySet failed');
+
+                // if it was a data:image/tiff and failed, upload original file if available
+                if (lastOriginalFile) {
+                    try {
+                        const resp = await uploadFileToServer(lastOriginalFile, 'gray8');
+                        if (resp && resp.dataURL) {
+                            const ok2 = await trySet(resp.dataURL);
+                            if (ok2) {
+                                console.log('[showInputPreview] ✅ server fallback success');
+                                return;
+                            }
+                        }
+                    } catch(e){
+                        // silent — will remove preview below
+                    }
+                }
+            }
+
+            // fallback: remove preview img
+            // silent fail — no need to log if preview simply not available
+            img.remove();
+        } catch (outerError) {
+            console.error('[showInputPreview] outer catch error:', outerError);
+            img.remove();
+        }
     })();
 }
 
@@ -890,9 +1065,14 @@ export function showPreview(dataURL){
     img.style.maxWidth = '420px';
     img.style.maxHeight = '420px';
     img.style.borderRadius = '6px';
-    img.onload = ()=> {};
+    img.onload = ()=> {
+        console.log('[showPreview] image loaded successfully');
+    };
     img.onerror = (e)=> {
-        console.error('[showPreview] failed to display image', e, 'src:', (dataURL && (dataURL.slice ? dataURL.slice(0,80) : String(dataURL))));
+        // Only log if src is not being updated (avoid double error for intermediate preview)
+        if (img.src === dataURL) {
+            console.warn('[showPreview] failed to load final image', 'src preview:', (dataURL && (dataURL.slice ? dataURL.slice(0,80) : String(dataURL))));
+        }
     };
     try {
         img.src = dataURL;
@@ -904,3 +1084,57 @@ export function showPreview(dataURL){
 
 // ensure old export kept for code that used it
 export { showPreview as showPreviewOld };
+
+// Helper: collect extra params for mode (gamma/piecewise manual override)
+function collectExtrasForMode(mode) {
+    const extras = {};
+    
+    if (mode === 'gamma') {
+        if (gammaInput && gammaInput.value) {
+            extras.gamma = parseFloat(gammaInput.value);
+        }
+    } else if (mode === 'piecewise') {
+        if (r1Input && r1Input.value) extras.r1 = parseInt(r1Input.value, 10);
+        if (s1Input && s1Input.value) extras.s1 = parseInt(s1Input.value, 10);
+        if (r2Input && r2Input.value) extras.r2 = parseInt(r2Input.value, 10);
+        if (s2Input && s2Input.value) extras.s2 = parseInt(s2Input.value, 10);
+    } else if (mode === 'denoise_manual') {
+        // Collect denoise method and kernel
+        if (denoiseMethodSelect && denoiseMethodSelect.value) {
+            extras.method = denoiseMethodSelect.value;
+        }
+        if (denoiseKernelInput && denoiseKernelInput.value) {
+            extras.kernel = parseInt(denoiseKernelInput.value, 10);
+        }
+    } else if (mode === 'sharpening') {
+        // Collect sharpening type and amount
+        if (sharpeningTypeSelect && sharpeningTypeSelect.value) {
+            extras.sharp_type = sharpeningTypeSelect.value;
+        }
+        
+    } else if (mode === 'frequency_filter') {
+        // Collect filter type, cutoff, order
+        if (freqFilterTypeSelect && freqFilterTypeSelect.value) {
+            extras.filter_type = freqFilterTypeSelect.value;
+        }
+        if (freqCutoffInput && freqCutoffInput.value) {
+            extras.cutoff = parseFloat(freqCutoffInput.value);
+        }
+        if (freqOrderInput && freqOrderInput.value) {
+            extras.order = parseInt(freqOrderInput.value, 10);
+        }
+    } else if (mode === 'threshold') {
+        // Collect threshold T
+        if (thresholdInput && thresholdInput.value) {
+            extras.threshold = parseInt(thresholdInput.value, 10);
+        }
+    } else if (mode === 'count_objects') {
+        // Collect target class
+        if (countClassInput && countClassInput.value) {
+            extras.target_class = 'all';
+        }
+    }
+    
+    console.log('[collectExtrasForMode] mode:', mode, 'extras:', extras);
+    return extras;
+}

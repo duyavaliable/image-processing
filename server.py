@@ -133,115 +133,220 @@ def api_process():
                        "microwave","oven","toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear",
                        "hair drier","toothbrush"]
             
-            # Get target class from form (default 'all')
+            # Get target class from form (luôn là 'all')
             target_class = request.form.get('target_class', 'all').strip().lower()
-            print(f"[count_objects] target_class received: '{target_class}'")  # DEBUG
+            print(f"[count_objects] target_class received: '{target_class}'")
             
-            count = 0
+            detected_objects = []  # Lưu danh sách đối tượng đã detect
+            
             for i in (indices.flatten() if len(indices) else []):
-                x,y,w,h = boxes[i]
+                x, y, w, h = boxes[i]
                 cls = class_ids[i] if i < len(class_ids) else -1
                 label = CLASSES[cls] if (isinstance(CLASSES, list) and cls < len(CLASSES)) else f'class_{cls}'
                 score = confidences[i]
                 
-                # Filter by target_class
-                # FIXED: ensure exact match (strip whitespace from both)
-                label_normalized = label.strip().lower()
-                target_normalized = target_class.strip().lower()
-                if target_normalized == 'all' or label_normalized == target_normalized:
-                    count += 1
-                    cv2.rectangle(img_color, (x,y), (x+w,y+h), (0,255,0), 2)
-                    cv2.putText(img_color, f"{label} {score:.2f}", (x, max(15,y-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
-                else:
-                    # DEBUG: log skipped detections
-                    print(f"[count_objects] skipped: label='{label}' (normalized='{label_normalized}') vs target='{target_normalized}'")
+                # Vẽ bounding box cho tất cả đối tượng
+                cv2.rectangle(img_color, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(img_color, f"{label} {score:.2f}", (x, max(15, y-5)), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                
+                # Lưu thông tin đối tượng
+                detected_objects.append({
+                    'label': label,
+                    'confidence': round(float(score), 2),
+                    'bbox': [int(x), int(y), int(w), int(h)]
+                })
             
-            # Draw count overlay
-            text = f"Total: {count}" if target_class == 'all' else f"{target_class.capitalize()}: {count}"
-            cv2.putText(img_color, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,255), 3)
+            # THAY ĐỔI: không vẽ text overlay "Total: X" nữa
+            # cv2.putText(img_color, text, (10, 30), ...) <-- XÓA dòng này
             
-            params = {'count': count, 'target_class': target_class, 'backend':'yolo_count'}
-            return jsonify({'dataURL': to_data_url_png(img_color), 'message': f'Counted {count} {target_class}', 'params': params}), 200
+            # Trả về danh sách đối tượng thay vì count
+            params = {
+                'detected_objects': detected_objects,  # Danh sách đối tượng
+                'total_detected': len(detected_objects),  # Số lượng (dùng cho params, không hiển thị)
+                'backend': 'yolo_detect'
+            }
+            
+            message = f'Detected {len(detected_objects)} objects' if len(detected_objects) > 0 else 'No objects detected'
+            
+            return jsonify({
+                'dataURL': to_data_url_png(img_color), 
+                'message': message, 
+                'params': params
+            }), 200
 
-        if mode == 'denoise':
-            # Auto noise detection + removal pipeline
+        # REMOVED: denoise auto
+        # if mode == 'denoise': ...
+        
+        if mode == 'denoise_manual':
+            # Manual denoise: user selects method
             img = ensure_gray_uint8_from_bytes(data)
+            method_name = request.form.get('method', 'median')
+            kernel = int(request.form.get('kernel', '5'))
+            if kernel % 2 == 0:
+                kernel += 1
+            kernel = max(3, min(31, kernel))
             
-            # Step 1: Detect noise type
-            noise_type, noise_params = detect_noise_type(img)
-            # DEBUG logs: raw detection info and types
-            print(f"[denoise] detected noise_type={noise_type}")
-            try:
-                print(f"[denoise] raw noise_params: {repr(noise_params)}")
-                for k, v in (noise_params.items() if isinstance(noise_params, dict) else []):
-                    try:
-                        print(f"[denoise] noise_params[{k}] type={type(v)} preview={str(v)[:200]}")
-                    except Exception:
-                        print(f"[denoise] noise_params[{k}] type={type(v)} (preview failed)")
-            except Exception:
-                print("[denoise] failed to print noise_params details")
+            # HISTOGRAM ANALYSIS for noise detection
+            H, W = img.shape
+            total = float(H * W)
+            n_black = int(np.sum(img == 0))
+            n_white = int(np.sum(img == 255))
+            extreme_ratio = float((n_black + n_white) / total)
             
-            # Step 2: Apply filter based on noise type
-            if noise_type == 'salt_pepper':
-                img_denoised = adaptive_median_filter(img, max_size=7)
-                se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                img_denoised = cv2.morphologyEx(img_denoised, cv2.MORPH_OPEN, se)
-                method = 'Adaptive Median + Opening'
+            flat = img.flatten().astype(np.float32)
+            mean_val = float(np.mean(flat))
+            var = float(np.var(flat))
+            cv_val = float(np.std(flat) / (mean_val + 1e-12))
             
-            elif noise_type == 'gaussian':
-                sigma = max(10, min(100, int(np.sqrt(noise_params.get('variance', 100)))))
-                img_denoised = cv2.bilateralFilter(img, 9, sigma, sigma)
-                method = 'Bilateral Filter'
+            # Suggest method based on histogram features
+            suggested_method = None
+            if extreme_ratio > 0.02:
+                suggested_method = 'median'  # salt-pepper
+            elif cv_val > 0.28:
+                suggested_method = 'lee'  # speckle
+            elif 100 < var < 2000:
+                suggested_method = 'bilateral'  # gaussian
+            else:
+                suggested_method = method_name  # use user's choice
             
-            elif noise_type == 'periodic':
-                try:
-                    img_denoised, freqs = notch_filter_auto(img)
-                    method = 'Notch Filter'
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    print(f"[denoise] notch_filter_auto failed: {e!r} — falling back to bilateral")
-                    img_denoised = cv2.bilateralFilter(img, 9, 75, 75)
-                    freqs = []
-                    method = 'Notch Filter (failed->bilateral)'
-            
-            elif noise_type == 'speckle':
-                img_denoised = lee_filter(img, window_size=5)
-                method = 'Lee Filter'
-            
+            # Apply selected method
+            if method_name == 'median':
+                img_denoised = cv2.medianBlur(img, kernel)
+                method = f'Median (k={kernel})'
+            elif method_name == 'bilateral':
+                sigma = max(10, min(100, kernel * 10))
+                img_denoised = cv2.bilateralFilter(img, kernel, sigma, sigma)
+                method = f'Bilateral (d={kernel}, sigma={sigma})'
+            elif method_name == 'nlm':
+                img_denoised = cv2.fastNlMeansDenoising(img, None, h=kernel*2, templateWindowSize=7, searchWindowSize=21)
+                method = f'Non-local Means (h={kernel*2})'
+            elif method_name == 'lee':
+                img_denoised = lee_filter(img, window_size=kernel)
+                method = f'Lee Filter (w={kernel})'
             else:
                 img_denoised = cv2.bilateralFilter(img, 9, 75, 75)
-                method = 'Bilateral Filter (fallback)'
-            
-            # DEBUG: check img_denoised before encoding
-            print(f"[denoise] img_denoised dtype={img_denoised.dtype}, shape={img_denoised.shape}, sample={img_denoised[0,0] if img_denoised.size > 0 else 'empty'}")
-            
-            # Convert noise_params to JSON-safe structure and log
-            try:
-                noise_params_safe = numpy_to_python(noise_params)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"[denoise] numpy_to_python failed: {e!r}; using repr fallback")
-                noise_params_safe = {'_error': str(e), 'raw': repr(noise_params)}
-            print(f"[denoise] noise_params_safe: {repr(noise_params_safe)[:1000]}")
-
-            # Encode to PNG dataURL
-            try:
-                dataURL = to_data_url_png(img_denoised)
-                print(f"[denoise] to_data_url_png returned dataURL length={len(dataURL) if dataURL else 0}")
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"[denoise] to_data_url_png failed: {e!r}")
-                dataURL = None
+                method = 'Bilateral (default)'
             
             params = {
-                'noise_type': noise_type,
                 'method': method,
-                'noise_params': noise_params_safe
+                'kernel': kernel,
+                'histogram': {
+                    'extreme_ratio': round(extreme_ratio, 4),
+                    'variance': round(var, 2),
+                    'cv': round(cv_val, 4),
+                    'suggested_method': suggested_method
+                }
             }
-            return jsonify({'dataURL': dataURL, 'message': f'Denoised: {noise_type}', 'params': params}), 200
+            return jsonify({'dataURL': to_data_url_png(img_denoised), 'message': f'Manual denoise: {method}', 'params': params}), 200
+        
+        if mode == 'histogram_eq':
+            # Histogram Equalization (File 03)
+            img = ensure_gray_uint8_from_bytes(data)
+            img_eq = cv2.equalizeHist(img)
+            params = {'method': 'Histogram Equalization'}
+            return jsonify({'dataURL': to_data_url_png(img_eq), 'message': 'Histogram Equalized', 'params': params}), 200
+        
+        if mode == 'sharpening':
+            # Sharpening: preserve color if input is color
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                # Fallback: try grayscale
+                img = ensure_gray_uint8_from_bytes(data)
+                is_color = False
+            else:
+                is_color = True
+            
+            sharp_type = request.form.get('sharp_type', 'laplacian')
+            
+            # Apply sharpening (works for both grayscale and color)
+            if sharp_type == 'laplacian':
+                # Laplacian sharpening: f - ∇²f
+                # KHÔNG sử dụng A parameter
+                if is_color:
+                    # Apply Laplacian per channel
+                    img_sharp = np.zeros_like(img, dtype=np.uint8)
+                    for c in range(3):
+                        laplacian = cv2.Laplacian(img[:, :, c], cv2.CV_64F)
+                        # f - laplacian (standard Laplacian sharpening)
+                        img_sharp[:, :, c] = np.clip(img[:, :, c].astype(np.float64) - laplacian, 0, 255).astype(np.uint8)
+                else:
+                    laplacian = cv2.Laplacian(img, cv2.CV_64F)
+                    # f - laplacian (standard Laplacian sharpening)
+                    img_sharp = np.clip(img.astype(np.float64) - laplacian, 0, 255).astype(np.uint8)
+                method = 'Laplacian'
+            else:
+                img_sharp = img
+                method = 'No sharpening'
+            
+            params = {'method': method, 'color': is_color}
+            return jsonify({'dataURL': to_data_url_png(img_sharp), 'message': f'Sharpened: {method}', 'params': params}), 200
+        
+        if mode == 'frequency_filter':
+            # Frequency domain filters (File 05: Lowpass/Highpass Ideal/Butterworth/Gaussian)
+            img = ensure_gray_uint8_from_bytes(data)
+            filter_type = request.form.get('filter_type', 'lowpass_gaussian')
+            cutoff = float(request.form.get('cutoff', '30'))
+            order_n = int(request.form.get('order', '2'))
+            
+            H, W = img.shape
+            dft = cv2.dft(np.float32(img), flags=cv2.DFT_COMPLEX_OUTPUT)
+            dft_shift = np.fft.fftshift(dft)
+            
+            # Create frequency mask
+            cy, cx = H // 2, W // 2
+            yy, xx = np.ogrid[:H, :W]
+            dist = np.sqrt((xx - cx)**2 + (yy - cy)**2)
+            
+            if 'lowpass' in filter_type:
+                if 'ideal' in filter_type:
+                    mask = (dist <= cutoff).astype(np.float32)
+                elif 'butterworth' in filter_type:
+                    mask = 1 / (1 + (dist / (cutoff + 1e-12))**(2*order_n))
+                else:  # gaussian
+                    mask = np.exp(-(dist**2) / (2 * cutoff**2))
+                method = f'Lowpass {filter_type.split("_")[1].capitalize()} (D0={cutoff})'
+            else:  # highpass
+                if 'ideal' in filter_type:
+                    mask = (dist > cutoff).astype(np.float32)
+                elif 'butterworth' in filter_type:
+                    mask = 1 / (1 + (cutoff / (dist + 1e-12))**(2*order_n))
+                else:  # gaussian
+                    mask = 1 - np.exp(-(dist**2) / (2 * cutoff**2))
+                method = f'Highpass {filter_type.split("_")[1].capitalize()} (D0={cutoff})'
+            
+            # Apply mask
+            mask = np.stack([mask, mask], axis=-1)
+            dft_shift_filtered = dft_shift * mask
+            dft_ishift = np.fft.ifftshift(dft_shift_filtered)
+            img_back = cv2.idft(dft_ishift)
+            img_back = cv2.magnitude(img_back[:, :, 0], img_back[:, :, 1])
+            
+            # Normalize
+            img_min, img_max = img_back.min(), img_back.max()
+            if img_max > img_min:
+                img_back = ((img_back - img_min) / (img_max - img_min) * 255.0)
+            img_filtered = np.clip(img_back, 0, 255).astype(np.uint8)
+            
+            params = {'method': method, 'cutoff': cutoff, 'order': order_n}
+            return jsonify({'dataURL': to_data_url_png(img_filtered), 'message': f'Frequency filtered: {method}', 'params': params}), 200
+        
+        if mode == 'wiener':
+            # Wiener filter (File 07) — simplified (assume known noise variance)
+            img = ensure_gray_uint8_from_bytes(data)
+            noise_var = float(request.form.get('noise_var', '100'))
+            
+            # Estimate signal variance
+            signal_var = float(np.var(img.astype(np.float32)))
+            
+            # Wiener filter in spatial domain (approximation)
+            # true Wiener requires PSF — here use bilateral as approximation
+            sigma_color = max(10, min(100, int(np.sqrt(noise_var))))
+            sigma_space = sigma_color
+            img_wiener = cv2.bilateralFilter(img, 9, sigma_color, sigma_space)
+            
+            params = {'method': 'Wiener (approx via Bilateral)', 'noise_var': noise_var, 'signal_var': signal_var}
+            return jsonify({'dataURL': to_data_url_png(img_wiener), 'message': 'Wiener filtered', 'params': params}), 200
 
         # NOTE: 'pca' (legacy PCA denoising pipeline) removed to simplify server.
         # If client still sends mode='pca' return a clear error and point to supported modes.
@@ -256,56 +361,16 @@ def api_process():
 
             if mode in ('gamma', 'powerlaw', 'power-law'):
                 gamma_param = request.form.get('gamma') or request.form.get('gamma_value') or request.form.get('g')
-                gamma_val = float(gamma_param) if gamma_param is not None else None
-
-                # histogram PMF + CDF and percentiles
-                flat = img.flatten().astype(np.uint8)
-                h, bins = np.histogram(flat, bins=256, range=(0,256))
-                pmf = h.astype(np.float64) / (h.sum() + 1e-12)
-                cdf = pmf.cumsum()
-                p10 = float(np.percentile(flat, 10))
-                p30 = float(np.percentile(flat, 30))
-                p50 = float(np.percentile(flat, 50))
-                p70 = float(np.percentile(flat, 70))
-                p90 = float(np.percentile(flat, 90))
-                spread = p90 - p10
-
-                def cdf_percentile_to_level(pct):
-                    return float(np.interp(pct, cdf, bins[:-1]))
-
-                r_med = cdf_percentile_to_level(0.5)
-                r_dark = cdf_percentile_to_level(0.3)
-                r_bright = cdf_percentile_to_level(0.7)
-
-                if gamma_val is None:
-                    target = 0.5
-                    def safe_gamma_from_mapping(r_level, tgt=target):
-                        r_norm = max(r_level / 255.0, 1e-6)
-                        try:
-                            return float(np.log(tgt) / np.log(r_norm))
-                        except Exception:
-                            return 1.0
-
-                    gamma_med = safe_gamma_from_mapping(r_med, target)
-
-                    if spread < 25:
-                        if p50 < 110:
-                            gamma_spread = 0.7
-                        elif p50 > 145:
-                            gamma_spread = 1.4
-                        else:
-                            gamma_spread = 0.95
-                    else:
-                        skew_corr = (128.0 - p50) / 128.0
-                        gamma_spread = 1.0 + skew_corr * 0.6
-
-                    gamma_est = 0.75 * gamma_med + 0.25 * gamma_spread
-                    gamma_val = float(np.clip(gamma_est, 0.4, 3.0))
+                
+                if gamma_param is None:
+                    return jsonify({'error': 'Missing required parameter: gamma'}), 400
+                
+                gamma_val = float(gamma_param)
 
                 r = img.astype(np.float32) / 255.0
                 s = np.power(r, gamma_val)
                 img = np.clip((s * 255.0), 0, 255).astype(np.uint8)
-                params = {'gamma': float(gamma_val), 'p10': p10, 'p50': p50, 'p90': p90, 'spread': spread}
+                params = {'gamma': float(gamma_val)}
 
             elif mode == 'negative':
                 img = 255 - img
@@ -313,6 +378,7 @@ def api_process():
             elif mode == 'threshold':
                 T = int(request.form.get('threshold') or request.form.get('T') or 128)
                 _, img = cv2.threshold(img, T, 255, cv2.THRESH_BINARY)
+                params['threshold'] = T  # add to response params
 
             elif mode in ('log', 'logarithmic', 'logrithmic'):
                 c_val = float(request.form.get('c', '2.0'))
@@ -375,49 +441,15 @@ def api_process():
                 params = {'median_k': int(k), 'pre_gauss': int(g), 'morph_k': int(morph), 'passes': int(passes)}
 
             elif mode in ('piecewise', 'piecewise_linear', 'stretch'):
-                flat = img.flatten().astype(np.uint8)
-                h, bins = np.histogram(flat, bins=256, range=(0,256))
-                pmf = h.astype(np.float64) / (h.sum() + 1e-12)
-                win = 7
-                sigma = 2.0
-                xw = np.arange(-win, win+1)
-                kernel = np.exp(-0.5*(xw/sigma)**2)
-                kernel = kernel / kernel.sum()
-                pmf_smooth = np.convolve(pmf, kernel, mode='same')
-
-                peaks = []
-                thresh = pmf_smooth.max() * 0.03
-                for i in range(1, len(pmf_smooth)-1):
-                    if pmf_smooth[i] > pmf_smooth[i-1] and pmf_smooth[i] > pmf_smooth[i+1] and pmf_smooth[i] >= thresh:
-                        peaks.append((pmf_smooth[i], i))
-                peaks.sort(reverse=True)
-
-                if len(peaks) >= 2:
-                    cand_idx = [p[1] for p in peaks[:6]]
-                    best_pair = (0, (cand_idx[0], cand_idx[0]))
-                    for i in range(len(cand_idx)):
-                        for j in range(i+1, len(cand_idx)):
-                            d = abs(cand_idx[i] - cand_idx[j])
-                            if d > best_pair[0]:
-                                best_pair = (d, (cand_idx[i], cand_idx[j]))
-                    r1_level = int(np.clip(round(min(best_pair[1])), 1, 254))
-                    r2_level = int(np.clip(round(max(best_pair[1])), r1_level+1, 255))
-                else:
-                    p30 = float(np.percentile(flat, 30))
-                    p70 = float(np.percentile(flat, 70))
-                    r1_level = int(np.clip(round(p30), 1, 254))
-                    r2_level = int(np.clip(round(p70), r1_level+1, 255))
-
-                if 'auto' in request.form:
-                    r1 = r1_level
-                    r2 = r2_level
-                    s1 = int(np.clip(round(r1_level * 0.6), 0, 255))
-                    s2 = int(np.clip(round(r2_level * 1.05), 0, 255))
-                else:
-                    r1 = int(request.form.get('r1', r1_level))
-                    s1 = int(request.form.get('s1', int(np.clip(round(r1_level * 0.6),0,255))))
-                    r2 = int(request.form.get('r2', r2_level))
-                    s2 = int(request.form.get('s2', int(np.clip(round(r2_level * 1.05),0,255))))
+                # Require manual r1/s1/r2/s2
+                has_manual = all(k in request.form for k in ['r1', 's1', 'r2', 's2'])
+                if not has_manual:
+                    return jsonify({'error': 'Missing required parameters: r1, s1, r2, s2'}), 400
+                
+                r1 = int(request.form.get('r1'))
+                s1 = int(request.form.get('s1'))
+                r2 = int(request.form.get('r2'))
+                s2 = int(request.form.get('s2'))
 
                 r1 = max(1, min(254, r1))
                 r2 = max(r1+1, min(255, r2))
@@ -433,6 +465,8 @@ def api_process():
                 idx3 = x > r2
                 y[idx3] = s2 + (255.0 - s2) * (x[idx3] - r2) / float(255 - r2)
                 img = np.clip(np.round(y), 0, 255).astype(np.uint8)
+                
+                params = {'r1': r1, 's1': s1, 'r2': r2, 's2': s2}
 
         data_url = to_data_url_png(img)
         return jsonify({'dataURL': data_url, 'message':'ok', 'params': params}), 200
@@ -505,51 +539,88 @@ def to_data_url_png(img):
 
 def detect_noise_type(img):
     """
-    Detect noise type: salt_pepper, gaussian, periodic, speckle
-    Returns: (noise_type: str, params: dict)
+    Primary: Frequency Domain Processing
+    Fallback: Histogram features (extreme_ratio, variance, CV)
     """
     H, W = img.shape
-    
-    # 1. Check salt-and-pepper (>1% extreme pixels)
+    total = float(H * W)
+
+    # 1. Salt-pepper: extreme pixels + spatial randomness check
     n_black = int(np.sum(img == 0))
     n_white = int(np.sum(img == 255))
-    extreme_ratio = float((n_black + n_white) / (H * W))
+    extreme_ratio = float((n_black + n_white) / total)
     
-    if extreme_ratio > 0.01:
-        return ('salt_pepper', {'extreme_ratio': extreme_ratio, 'black': n_black, 'white': n_white})
-    
-    # 2. Check periodic noise (frequency domain peaks)
-    dft = cv2.dft(np.float32(img), flags=cv2.DFT_COMPLEX_OUTPUT)
-    dft_shift = np.fft.fftshift(dft)
-    magnitude = cv2.magnitude(dft_shift[:, :, 0], dft_shift[:, :, 1])
-    mag_log = np.log1p(magnitude)
-    
+    # STRICTER threshold: only if extreme_ratio > 2% (natural images rarely have >2% pure black/white)
+    if extreme_ratio > 0.02:
+        # Additional check: spatial distribution (salt-pepper is random, not clustered)
+        # Simple heuristic: if extreme pixels are clustered (e.g., all in one corner) -> NOT salt-pepper
+        extreme_mask = (img == 0) | (img == 255)
+        if extreme_mask.any():
+            # Count connected components of extreme pixels
+            num_labels, _ = cv2.connectedComponents(extreme_mask.astype(np.uint8), connectivity=8)
+            # If few large clusters -> likely natural extreme values (shadows/highlights), NOT noise
+            # Salt-pepper has many small isolated pixels -> num_labels should be high
+            if num_labels > (n_black + n_white) * 0.3:  # at least 30% of extreme pixels are isolated
+                return ('salt_pepper', {'extreme_ratio': extreme_ratio, 'black': n_black, 'white': n_white, 'num_clusters': int(num_labels)})
+        else:
+            # fallthrough if no extreme pixels (should not happen if extreme_ratio > 0.02)
+            pass
+
+    # 2. FREQUENCY DOMAIN (PRIMARY METHOD)
+    f = np.fft.fft2(img.astype(np.float32))
+    fshift = np.fft.fftshift(f)
+    mag = np.abs(fshift)
+    mag_log = np.log1p(mag)
+
+    # Exclude DC component
     cy, cx = H // 2, W // 2
-    mask = np.ones((H, W), dtype=bool)
-    mask[cy-10:cy+10, cx-10:cx+10] = False  # exclude DC
-    
-    threshold = mag_log[mask].mean() + 3 * mag_log[mask].std()
-    peaks = np.where((mag_log > threshold) & mask)
-    
-    if len(peaks[0]) > 5:
-        peak_coords = [(int(peaks[0][i]), int(peaks[1][i])) for i in range(min(5, len(peaks[0])))]
-        return ('periodic', {'num_peaks': len(peaks[0]), 'peak_coords': peak_coords})
-    
-    # 3. Check Gaussian (moderate variance, no extreme pixels)
+    r_dc = max(3, int(min(H, W) * 0.01))
+    mask = np.ones_like(mag_log, dtype=bool)
+    mask[max(0, cy-r_dc):min(H, cy+r_dc), max(0, cx-r_dc):min(W, cx+r_dc)] = False
+
+    mag_vals = mag_log[mask]
+    mean_mag = float(np.mean(mag_vals)) if mag_vals.size else 0.0
+    std_mag = float(np.std(mag_vals)) if mag_vals.size else 0.0
+
+    # Find peaks
+    peak_thresh = mean_mag + 3.5 * std_mag
+    peaks_idx = np.where((mag_log > peak_thresh) & mask)
+    num_peaks = int(peaks_idx[0].size)
+
+    # Compute peak energy ratio
+    flat_mag = mag_vals.flatten()
+    total_energy = float(np.sum(flat_mag**2) + 1e-12)
+    peak_energy = 0.0
+    if num_peaks > 0:
+        peak_coords = list(zip(peaks_idx[0].tolist(), peaks_idx[1].tolist()))
+        K = min(50, num_peaks)
+        peak_vals = [(mag_log[y,x], y, x) for (y,x) in peak_coords]
+        peak_vals.sort(reverse=True, key=lambda t: t[0])
+        peak_energy = float(sum((v**2) for (v,_,_) in peak_vals[:K]))
+    peak_energy_ratio = float(peak_energy / total_energy)
+
+    # Decision: periodic if strong peaks with significant energy
+    if num_peaks >= 6 and peak_energy_ratio > 0.015:
+        top_coords = [(int(y), int(x)) for (v,y,x) in peak_vals[:8]]
+        return ('periodic', {
+            'num_peaks': num_peaks,
+            'peak_energy_ratio': round(peak_energy_ratio, 6),
+            'peak_coords': top_coords
+        })
+
+    # 3. Histogram fallback: Gaussian vs speckle
     flat = img.flatten().astype(np.float32)
     mean_val = float(np.mean(flat))
     var = float(np.var(flat))
+    cv_val = float(np.std(flat) / (mean_val + 1e-12))
+
+    if cv_val > 0.28:
+        return ('speckle', {'cv': round(cv_val, 4), 'variance': round(var, 4)})
     
     if 100 < var < 2000:
-        return ('gaussian', {'mean': mean_val, 'variance': var})
-    
-    # 4. Check speckle (high coefficient of variation)
-    cv_val = float(np.std(flat) / (mean_val + 1e-12))
-    if cv_val > 0.3:
-        return ('speckle', {'cv': cv_val, 'variance': var})
-    
-    # fallback
-    return ('unknown', {'variance': var})
+        return ('gaussian', {'mean': round(mean_val, 4), 'variance': round(var, 4)})
+
+    return ('unknown', {'variance': round(var, 4), 'cv': round(cv_val, 4)})
 
 def adaptive_median_filter(img, max_size=7):
     """
